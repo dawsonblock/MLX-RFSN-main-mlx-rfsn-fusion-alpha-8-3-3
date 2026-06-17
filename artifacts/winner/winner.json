@@ -1,0 +1,8 @@
+{
+  "winner": null,
+  "status": "NO_PROMOTION_ELIGIBLE_CANDIDATE",
+  "reason": "Teacher-forced validation artifacts are present, but promotion remains disabled until token provenance and runtime-instrumented cache traces are complete.",
+  "methodology": "teacher_forced_logit_v1",
+  "methodology_status": "TEACHER_FORCED_RERUN_COMPLETE_NO_PROMOTION",
+  "promotion_allowed": false
+}

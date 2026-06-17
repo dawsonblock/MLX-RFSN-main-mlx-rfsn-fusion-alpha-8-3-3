@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Exec(find)",
+      "Exec(python3)",
+      "Exec(python)",
+      "Exec(pytest)",
+      "Exec(sed)",
+      "Exec(git log)",
+      "Exec(git diff)",
+      "Exec(unzip)"
+    ]
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "state": "ready",
+  "backend_name": "metal_true_packed",
+  "strict_mode": true,
+  "kernel_source_hash": "767b2ae889b55572",
+  "kernel_configuration_hash": "cb181d8ba7712c20",
+  "mlx_version": "0.21.1",
+  "mlx_lm_version": "0.20.6",
+  "macos_version": "26.2",
+  "chip_model": "",
+  "memory_capacity_gb": 0.0,
+  "reason": "",
+  "git_commit": "a6faf730d9ca5d705bc13204a0626264b4831710",
+  "benchmark_source_hash": "",
+  "prompt_token_hash": "",
+  "python_version": "3.12.8",
+  "platform_machine": "arm64"
+}

@@ -1,0 +1,45 @@
+{
+  "metadata": {
+    "benchmark_methodology": "teacher_forced_logit_v1",
+    "methodology_status": "TEACHER_FORCED_RERUN_COMPLETE_NO_PROMOTION",
+    "baseline_decode_mode": "greedy",
+    "comparison_mode": "same_token_sequence",
+    "token_sequence_hash": "c2ff72f2e716ef3e30262cbaf5ec955629fe07b40ea88c6808602cb5b8b06716",
+    "promotion_allowed": false,
+    "artifact_schema_version": "2.0",
+    "mode": "promotion",
+    "gate_thresholds": {
+      "logit_cosine_min": 0.999,
+      "kl_divergence_max": 0.1,
+      "top5_overlap_min": 0.85,
+      "top10_overlap_min": 0.9,
+      "max_logit_delta_max": 10.0
+    },
+    "note": "Teacher-forced logit gate active. Artifacts are current and promotion is evaluated under the corrected gate."
+  },
+  "results": [
+    {
+      "name": "mlx_lm_baseline",
+      "model_id": "unknown",
+      "candidate_status": "CONTROL",
+      "total_ms": 1015.8930901670828,
+      "tokens_per_sec": 45.400753732533076,
+      "actual_kv_memory_mb": 0.5859375,
+      "working_set_memory_mb": 975.2498388290405,
+      "size_ratio": 1.0,
+      "compression_factor": 1.0,
+      "logit_cosine": 1.0,
+      "kl_divergence": 0.0,
+      "top1_match": 1.0,
+      "top5_overlap": 1.0,
+      "top10_overlap": 1.0,
+      "max_logit_delta": 0.0,
+      "gate_status": "PASS_NO_PROMOTE",
+      "promotion_eligible": false,
+      "real_cache_used": true,
+      "count": 6,
+      "notes": "FP16 baseline \u2014 no compression applied",
+      "failed_gate_reasons": []
+    }
+  ]
+}
