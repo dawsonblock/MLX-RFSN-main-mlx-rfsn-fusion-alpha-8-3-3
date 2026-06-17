@@ -438,7 +438,6 @@ class RFSNDirectPackedCandidate(KVCompressionCandidate):
                 generated_tokens=gen_tokens,
                 generated_text=result_text,
                 actual_kv_memory_mb=kv_memory_mb,
-                estimated_kv_memory_mb=estimated_kv_memory_mb,
                 measurement_kind=measurement_kind,
                 size_ratio=size_ratio,
                 compression_factor=compression_factor,

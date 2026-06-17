@@ -255,6 +255,116 @@ def test_strict_mode_raises_on_missing_cache() -> None:
 
 
 @pytest.mark.skipif(not HAS_MLX, reason="MLX not installed")
+def test_strict_mode_allows_staging_only_attention_without_paged_view(
+    monkeypatch,
+) -> None:
+    """Strict mode must allow dense attention over staging before any block flush."""
+    import rfsn_v10.integrations.mlx_lm_model_support.attention_wrapper as attention_wrapper
+    from rfsn_v10.cache.cartesian_codec import CartesianCodec
+    from rfsn_v10.integrations.mlx_lm_model_support.attention_wrapper import (
+        RfsnDirectPackedKVCache,
+        install_packed_attention,
+        uninstall_packed_attention,
+    )
+
+    k_codec = CartesianCodec(bits=8, group_size=64, use_wht=True, sign_seed=42)
+    v_codec = CartesianCodec(bits=8, group_size=64, use_wht=True, sign_seed=42)
+
+    class FakeLinear(nn.Module):
+        def __call__(self, x):
+            return x
+
+    class FakeRope(nn.Module):
+        def __call__(self, x, offset=0):
+            return x
+
+    class FakeOProj(nn.Module):
+        def __call__(self, x):
+            return x
+
+    class FakePackedV4AttentionKernel:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def __call__(
+            self,
+            queries,
+            paged_kv,
+            scale,
+            causal,
+            query_start_pos,
+            strict,
+            layer_id,
+            is_prefill,
+        ):
+            B, H, L, D = queries.shape
+            return (
+                mx.zeros((B, H, L, D), dtype=queries.dtype),
+                mx.zeros((B, H, L), dtype=mx.float32),
+                mx.zeros((B, H, L), dtype=mx.float32),
+                None,
+            )
+
+    class FakeAttn(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.n_heads = 2
+            self.n_kv_heads = 2
+            self.scale = 0.125
+            self.q_proj = FakeLinear()
+            self.k_proj = FakeLinear()
+            self.v_proj = FakeLinear()
+            self.o_proj = FakeOProj()
+            self.rope = FakeRope()
+            self.call_count = 0
+
+        def __call__(self, x, mask=None, cache=None):
+            self.call_count += 1
+            return x
+
+    class FakeLayer(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.self_attn = FakeAttn()
+
+    class FakeModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.layers = [FakeLayer()]
+
+    model = FakeModel()
+    cache = RfsnDirectPackedKVCache(
+        layer_id=0,
+        key_codec=k_codec,
+        value_codec=v_codec,
+        staging_capacity=64,
+        strict=True,
+    )
+    caches = [cache]
+
+    install_packed_attention(model, caches, strict=True)
+    original_attn = model.layers[0].self_attn._original
+    x = mx.random.normal(shape=(1, 2, 128)).astype(mx.float32)
+
+    monkeypatch.setattr(attention_wrapper, "HAS_TRUE_PACKED_KERNEL", True)
+    monkeypatch.setattr(
+        attention_wrapper,
+        "PackedV4AttentionKernel",
+        FakePackedV4AttentionKernel,
+    )
+
+    result = model.layers[0].self_attn(x, mask=None, cache=cache)
+
+    assert result.shape == x.shape
+    assert original_attn.call_count == 0
+    assert cache.layer_cache.encoded_token_count == 0
+    assert cache.layer_cache.get_paged_kv_view() is None
+    assert cache.layer_cache.get_staging()[2] == 2
+
+    uninstall_packed_attention(model)
+
+
+@pytest.mark.skipif(not HAS_MLX, reason="MLX not installed")
 def test_permissive_fallback_increments_counter() -> None:
     """Permissive wrapper must count fallback and record backend."""
     from rfsn_v10.cache.cartesian_codec import CartesianCodec

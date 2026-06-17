@@ -156,6 +156,31 @@ def test_generator_does_not_mutate_model_layers() -> None:
         assert not hasattr(layer.self_attn, "_rfsn_original_call")
 
 
+def test_derive_execution_backend_accepts_packed_metal_variants() -> None:
+    """Packed-metal labels with staging/residual should not be mixed."""
+    gen = RFSNGenerator(
+        model=FakeModel(),
+        tokenizer=FakeTokenizer(),
+        enable_quantized_kv=False,
+    )
+
+    backend_stats = [
+        {"executed_backend": "packed_metal_only"},
+        {"executed_backend": "packed_metal_plus_staging"},
+        {"executed_backend": "packed_metal_plus_staging_residual"},
+    ]
+
+    assert gen._derive_execution_backend(backend_stats) == (
+        "packed_metal_plus_staging_residual"
+    )
+
+    mixed_stats = [
+        {"executed_backend": "packed_metal_only"},
+        {"executed_backend": "packed_reference"},
+    ]
+    assert gen._derive_execution_backend(mixed_stats) == "MIXED_INVALID"
+
+
 # ------------------------------------------------------------------
 # _build_chat_prompt
 # ------------------------------------------------------------------

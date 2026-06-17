@@ -504,13 +504,17 @@ class _PackedAttentionWrapper(nn.Module):
                 regions: list[tuple[Any, Any, Any]] = []
 
                 # ---- Packed region ----
-                # P0.7: In strict mode the direct-packed path requires a
-                # persistent paged arena.  Rebuilding a temporary arena from
-                # blocks on every attention call would reintroduce the O(history)
-                # copy that paged storage is meant to eliminate.
-                if paged_kv is None and self._strict:
+                # In strict mode, direct-packed sealed history must be backed by
+                # persistent paged storage. Staging-only attention is still valid:
+                # it uses dense attention over the mutable staging block and does
+                # not reconstruct sealed history.
+                if (
+                    paged_kv is None
+                    and self._strict
+                    and layer_cache.encoded_token_count > 0
+                ):
                     raise RuntimeError(
-                        "Direct packed attention requires persistent paged storage"
+                        "Direct packed attention requires persistent paged storage for sealed blocks"
                     )
 
                 if paged_kv is not None:

@@ -148,7 +148,9 @@ class RFSNGenerator:
 
         self._adapter = None
         if MLX_LM_AVAILABLE and enable_quantized_kv:
-            from ..integrations.mlx_lm_adapter.adapter import RfsnMLXReferenceAdapter
+            from ..integrations.mlx_lm_adapter.adapter import (
+                RfsnMLXReferenceAdapter,
+            )
             self._adapter = RfsnMLXReferenceAdapter(
                 model=model,
                 tokenizer=tokenizer,
@@ -513,6 +515,8 @@ class RFSNGenerator:
 
         P0 Fix: Returns one of:
         - PACKED_MLX_REFERENCE: All layers used packed reference
+        - TRUE_PACKED_METAL: All layers used true-packed Metal (possibly with
+          staging/residual)
         - METAL_DENSE_RECONSTRUCTED: Any layer used Metal dense reconstruction
         - DENSE_FALLBACK: Any layer fell back to dense
         - MIXED_INVALID: Inconsistent backends across layers
@@ -539,12 +543,19 @@ class RFSNGenerator:
         if fallbacks:
             return "DENSE_FALLBACK"
 
-        # Check for true packed Metal (MLX inline or standalone)
-        metal_packed = [
-            b for b in backends if "true_packed_metal" in b
+        # Check for true packed Metal (MLX inline or standalone).  The current
+        # wrapper labels include packed_metal_only,
+        # packed_metal_plus_staging, packed_metal_plus_residual, and
+        # packed_metal_plus_staging_residual.  Treat any packed_metal label as
+        # the packed-metal family; staging/dense residual regions are expected
+        # implementation details rather than backend inconsistencies.
+        packed_metal = [
+            b for b in backends if b.startswith("packed_metal")
         ]
-        if metal_packed and len(metal_packed) == len(backends):
-            return "TRUE_PACKED_METAL"
+        if packed_metal and len(packed_metal) == len(backends):
+            # Preserve the most specific observed label when layers differ only
+            # in staging/residual composition.
+            return sorted(packed_metal, key=len)[-1]
 
         # Check for packed reference
         packed_ref = [
