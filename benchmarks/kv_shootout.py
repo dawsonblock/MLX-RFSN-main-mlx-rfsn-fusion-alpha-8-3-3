@@ -361,12 +361,12 @@ def _run_once(
         result.working_set_memory_mb = peak_mb
 
     # Fix #5: Hard compressed-execution gate
-    # Only applies to packed candidates, not baseline.
-    # NOTE: full_history_materialization_calls > 0 is allowed because the
-    # current Metal path honestly records dense reconstruction. The promotion
-    # policy will reject such candidates; the gate only checks that counters
-    # are present and no silent dense fallback occurred.
-    if require_compressed_execution and candidate.name != "dense_mlx_baseline":
+    # Only applies to candidates that actually implement packed-block counters.
+    # MLX-LM built-in quantized KV is a CONTROL, not an RFSN packed candidate.
+    if require_compressed_execution and (
+        candidate.name != "dense_mlx_baseline"
+        and "rfsn_direct_packed" in candidate.name
+    ):
         if not (
             result.packed_blocks_created > 0
             and result.packed_blocks_read > 0

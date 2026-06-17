@@ -4,14 +4,9 @@
 
 | Candidate | Status | Speed (tps) | Memory (ratio) | Logit gate | Real cache used | Promotion |
 |-----------|--------|-------------|----------------|------------|-----------------|-----------|
-| mlx_lm_baseline | CONTROL | 17.92 | 1.000 | PASS_NO_PROMOTE | yes | no |
-| mlx_lm_quantized_kv_b8 | CONTROL | 26.98 | 0.500 | FAIL | yes | no |
-| rfsn_v10_k8_v5_gs64 | REFERENCE_ONLY | 16.38 | 0.500 | PENDING_LOGIT_GATE | yes | no |
-| rfsn_direct_packed_k8v8_gs64 | EXPERIMENTAL | — | baseline | ERROR | no | no |
-| rfsn_v11_offline_asymmetric_kv_k8v5_gs64 | EXPERIMENTAL | — | baseline | ERROR | no | no |
-| turboquant_v2_b4_gs64_rot | EXPERIMENTAL | 8.68 | 0.311 | FAIL | yes | no |
-| polar_reference_offline_b4_d128 | REFERENCE_ONLY | 5.44 | 0.132 | FAIL | yes | no |
-| turbo_polar_k4_qjl64 | EXPERIMENTAL | 2.92 | baseline | FAIL | yes | no |
+| dense_mlx_baseline | CONTROL | 232.79 | 1.000 | PASS_NO_PROMOTE | no | no |
+| mlx_lm_quantized_kv_b8 | CONTROL | 107.80 | 0.500 | FAIL | yes | no |
+| rfsn_direct_packed_k8v8_gs64_bs8 | EXPERIMENTAL | 13.27 | 0.500 | PASS_NO_PROMOTE | yes | no |
 
 | *Summary* | — | — | — | — | — | **No candidate is promotion eligible.** |
 
