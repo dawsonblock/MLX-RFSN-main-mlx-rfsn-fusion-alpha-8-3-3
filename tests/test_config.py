@@ -133,6 +133,26 @@ class TestRFSNConfig:
         assert isinstance(cfg.sparse_attention, SparseAttentionConfig)
         assert isinstance(cfg.quantization, QuantizationConfig)
 
+    def test_server_lan_requires_api_key(self):
+        with pytest.raises(ValueError, match="LAN mode"):
+            RFSNConfig(server={"host": "0.0.0.0"})
+
+    def test_server_lan_with_api_key_allowed(self):
+        cfg = RFSNConfig(
+            server={
+                "host": "0.0.0.0",
+                "require_api_key": True,
+                "api_key": "test-key",
+            }
+        )
+        assert cfg.server.host == "0.0.0.0"
+        assert cfg.server.require_api_key is True
+        assert cfg.server.api_key == "test-key"
+
+    def test_require_api_key_without_api_key_rejected(self):
+        with pytest.raises(ValueError, match="ServerConfig.api_key"):
+            RFSNConfig(server={"require_api_key": True})
+
     def test_from_env_with_defaults(self, monkeypatch):
         monkeypatch.delenv("RFSN_LOG_LEVEL", raising=False)
         monkeypatch.delenv("RFSN_LOG_FORMAT", raising=False)

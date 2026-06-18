@@ -40,6 +40,7 @@ sys.path.insert(0, str(REPO_ROOT))
 from rfsn_v11.candidates.runtime_config import RFSNRuntimeConfig
 from rfsn_v11.candidates.backend_state import BackendState
 from rfsn_v10.cache.memory import capture_memory_delta, finalize_memory_delta
+from rfsn_v11.candidates.quality_gates import evaluate_quality_gate
 
 
 ARTIFACTS_ROOT = Path("artifacts/proof/native_gate")
@@ -568,27 +569,7 @@ def _run_packed_trace(
     counters["effective_strict_mode"] = config.strict_backend
 
     # Phase 7: Measure memory from teacher-forced session
-    # Audit fix: count kernel-owned concatenation buffers
-    kernel_buffer_bytes = 0
-    for wrapper in cache_list_tf:
-        kernel = getattr(wrapper, "_cached_kernel", None)
-        if kernel is not None:
-            kernel_buffer_bytes += kernel.cached_buffer_bytes
-
-    # Estimate scratch: query transform + output + softmax temporaries
-    # For one decode step with Hq heads, Lq=1, D=head_dim:
-    #   wht_queries: Hq * 1 * D * 4 bytes (float32)
-    #   output: Hq * 1 * D * 4 bytes
-    #   running_max + running_sum: Hq * 1 * 4 bytes each
-    num_heads = getattr(model.layers[0].self_attn, "n_heads", 16)
-    head_dim = getattr(model.layers[0].self_attn, "head_dim", 64)
-    scratch_bytes = num_heads * (head_dim * 4 + 4 * 2)  # one step estimate
-
-    memory = _measure_session_memory(
-        session_tf,
-        kernel_buffer_bytes=kernel_buffer_bytes,
-        scratch_bytes=scratch_bytes,
-    )
+    memory = _measure_session_memory(session_tf)
 
     prompt_text = tokenizer.decode(prompt_ids)
 
@@ -613,89 +594,16 @@ def _run_packed_trace(
     }
 
 
-def _measure_session_memory(
-    session: Any,
-    kernel_buffer_bytes: int = 0,
-    scratch_bytes: int = 0,
-) -> dict:
-    """Measure memory from session layer caches into three categories.
-
-    Audit fix: count each unique packed array only once. The paged arena
-    stores references to the same arrays held in _key_blocks/_value_blocks,
-    so we must not double-count.
-    """
-    seen_ids: set[int] = set()
-    total_payload = 0
-    total_metadata = 0
-    total_staging = 0
-    total_dense_residual = 0
-    total_allocator = 0
-
-    def _add_unique(arr: Any) -> None:
-        nonlocal total_payload
-        if arr is None or not hasattr(arr, "size"):
-            return
-        aid = id(arr)
-        if aid in seen_ids:
-            return
-        seen_ids.add(aid)
-        total_payload += int(arr.size) * arr.dtype.size
-
-    for layer_cache in session._layer_caches.values():
-        # Count packed codes and scales from legacy blocks (unique by id)
-        for kb in layer_cache._key_blocks:
-            _add_unique(kb.packed_codes)
-            _add_unique(kb.scales)
-        for vb in layer_cache._value_blocks:
-            _add_unique(vb.packed_codes)
-            _add_unique(vb.scales)
-
-        # Arena instrumentation (do NOT double-count arrays already counted above)
-        if layer_cache._key_arena is not None:
-            inst = layer_cache._key_arena.to_instrumentation()
-            total_metadata += inst.get("metadata_bytes", 0)
-            total_allocator += inst.get("page_table_bytes", 0)
-        if layer_cache._value_arena is not None:
-            inst = layer_cache._value_arena.to_instrumentation()
-            total_metadata += inst.get("metadata_bytes", 0)
-            total_allocator += inst.get("page_table_bytes", 0)
-
-        # Staging
-        for sk in layer_cache._stage_keys:
-            if sk is not None and hasattr(sk, "size"):
-                total_staging += int(sk.size) * sk.dtype.size
-        for sv in layer_cache._stage_values:
-            if sv is not None and hasattr(sv, "size"):
-                total_staging += int(sv.size) * sv.dtype.size
-
-        # Dense residual
-        if layer_cache._dense_keys is not None and hasattr(layer_cache._dense_keys, "size"):
-            total_dense_residual += int(layer_cache._dense_keys.size) * layer_cache._dense_keys.dtype.size
-        if layer_cache._dense_values is not None and hasattr(layer_cache._dense_values, "size"):
-            total_dense_residual += int(layer_cache._dense_values.size) * layer_cache._dense_values.dtype.size
-
-    # Kernel concatenation buffers are session-external but real allocations
-    total_kernel = kernel_buffer_bytes
-
-    cat1_mb = round(total_payload / (1024 * 1024), 2)
-    cat2_mb = round((total_metadata + total_staging + total_dense_residual + total_allocator + total_kernel) / (1024 * 1024), 2)
-    cat3_mb = round(scratch_bytes / (1024 * 1024), 2)
-
-    return {
-        "category1_persistent_packed_mb": cat1_mb,
-        "category2_mutable_workingset_mb": cat2_mb,
-        "category3_transient_scratch_mb": cat3_mb,
-        "total_accounted_mb": round((total_payload + total_metadata + total_staging + total_dense_residual + total_allocator + total_kernel + scratch_bytes) / (1024 * 1024), 2),
-        "raw": {
-            "payload_bytes": total_payload,
-            "metadata_bytes": total_metadata,
-            "staging_bytes": total_staging,
-            "dense_residual_bytes": total_dense_residual,
-            "allocator_bytes": total_allocator,
-            "kernel_buffer_bytes": total_kernel,
-            "scratch_bytes": scratch_bytes,
-        },
-    }
+def _measure_session_memory(session: Any) -> dict:
+    """Measure memory using the canonical GenerationCacheSession reporter."""
+    report = session.memory_report()
+    data = report.to_dict()
+    counters = session.runtime_counters.to_dict()
+    if counters.get("packed_bytes_written", 0) > 0 and data.get("payload_bytes", 0) <= 0:
+        raise RuntimeError(
+            "packed bytes were written but memory_report has zero payload_bytes"
+        )
+    return data
 
 
 def _run_candidate_subprocess(
@@ -1163,17 +1071,16 @@ def main() -> int:
     # Quality threshold validation (fail-closed)
     for run in manifest["runs"]:
         quality = run.get("quality")
-        if quality:
-            kl = quality.get("kl_divergence")
-            if kl is not None and kl > 0.01:
-                v = f"KL {kl} > 0.01 at context {run['context_length']}"
-                violations.append(v)
-                all_ok = False
-            top1 = quality.get("top1_match")
-            if top1 is not None and top1 < 1.0:
-                v = f"top1_match {top1} < 1.0 at context {run['context_length']}"
-                violations.append(v)
-                all_ok = False
+        if quality is None:
+            v = f"quality metrics missing at context {run['context_length']}"
+            violations.append(v)
+            all_ok = False
+            continue
+        gate_result = evaluate_quality_gate(quality)
+        for reason in gate_result.failure_reasons:
+            v = f"{reason} at context {run['context_length']}"
+            violations.append(v)
+            all_ok = False
 
     # Finalize manifest with validation results
     manifest["status"] = "passed" if all_ok else "failed"

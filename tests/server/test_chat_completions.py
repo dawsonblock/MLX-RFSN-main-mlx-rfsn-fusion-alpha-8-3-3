@@ -47,10 +47,6 @@ class FakeGenerator:
         self.generate_call_count += 1
         yield from self.tokens
 
-    def generate(self, prompt: str, **gen_kwargs: Any):
-        self.generate_call_count += 1
-        yield from self.tokens
-
 
 class FakeTokenizer:
     """Fake tokenizer with optional chat template support."""

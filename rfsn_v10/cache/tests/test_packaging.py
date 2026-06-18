@@ -83,13 +83,23 @@ def test_wheel_builds() -> None:
     )
     assert install_result.returncode == 0, f"Wheel install failed: {install_result.stderr[:200]}"
 
+    import_code = """
+import rfsn_v10
+import rfsn_v10.server.app
+import rfsn_v10.server.cli
+from importlib.metadata import version
+assert rfsn_v10.__version__ not in (None, "0+unknown")
+assert version("mlx-rfsn") == rfsn_v10.__version__
+"""
     import_result = subprocess.run(
-        [str(venv_python), "-c", "import rfsn_v10.server.app"],
+        [str(venv_python), "-c", import_code],
         cwd="/tmp",
         capture_output=True,
         text=True,
     )
-    assert import_result.returncode == 0, f"Installed wheel import failed: {import_result.stderr[:200]}"
+    assert import_result.returncode == 0, (
+        f"Installed wheel import/version check failed: {import_result.stderr[:200]}"
+    )
 
     if install_dir.exists():
         shutil.rmtree(install_dir, ignore_errors=True)
