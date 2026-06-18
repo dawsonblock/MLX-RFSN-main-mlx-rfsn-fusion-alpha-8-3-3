@@ -1150,8 +1150,10 @@ def main() -> None:
             assert loaded.candidate_name == "test"
 
             # Test token sequence hash
-            from rfsn_v11.candidates.logit_capture import compute_token_sequence_hash
-            test_hash = compute_token_sequence_hash(
+            from rfsn_v11.candidates.logit_capture import (
+                compute_token_sequence_hash as token_sequence_hash_fn,
+            )
+            test_hash = token_sequence_hash_fn(
                 model_id="test",
                 prompt_id="test",
                 prompt_text="Hello",
@@ -1444,13 +1446,14 @@ def main() -> None:
             ]
 
     # Compute token-sequence hash from the last baseline result if
-    # available.  Requires MLX + tokenizer; on CPU-only sandboxes the
+    # available. Requires MLX + tokenizer; on CPU-only sandboxes the
     # hash remains empty and promotion is blocked.
     token_sequence_hash = ""
+    token_sequence_hash_error = None
     if mode == "full_logit" and last_baseline_result is not None:
-        try:
-            baseline_text = last_baseline_result.generated_text
-            if baseline_text and last_tokenizer is not None:
+        baseline_text = last_baseline_result.generated_text
+        if baseline_text and last_tokenizer is not None:
+            try:
                 target_ids = last_tokenizer.encode(baseline_text)
                 token_sequence_hash = compute_token_sequence_hash(
                     model_id=last_model_id,
@@ -1465,8 +1468,9 @@ def main() -> None:
                         last_tokenizer, "name_or_path", None
                     ),
                 )
-        except Exception:
-            pass
+            except Exception as exc:
+                token_sequence_hash_error = f"{type(exc).__name__}: {exc}"
+                token_sequence_hash = ""
     elif mode in ("memory", "quick", "promotion"):
         # Non-full-logit modes should reference the full_logit artifact
         # rather than copying the token hash directly. This preserves
@@ -1563,6 +1567,8 @@ def main() -> None:
         release_config_data = {}
 
     # Build run bundle for policy evaluation
+    if token_sequence_hash_error:
+        print(f"\nWARNING: token_sequence_hash computation failed: {token_sequence_hash_error}")
     run_bundle = {
         "metadata": {
             "token_sequence_hash": token_sequence_hash,
@@ -1620,6 +1626,15 @@ def main() -> None:
         promotion_allowed=promotion_allowed,
         mode=mode,
     )
+
+    if mode == "full_logit" and not token_sequence_hash:
+        print(
+            "\nSTRICT PROVENANCE: full-logit artifact missing "
+            "token_sequence_hash"
+        )
+        if token_sequence_hash_error:
+            print(f"  - token_sequence_hash_error: {token_sequence_hash_error}")
+        sys.exit(3)
 
     # P0 Fix: Final strict execution checks (variables defined at function start)
     if strict_execution:
