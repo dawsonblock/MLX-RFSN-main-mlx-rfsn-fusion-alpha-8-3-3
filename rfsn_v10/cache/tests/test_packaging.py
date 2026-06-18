@@ -14,8 +14,10 @@ These tests are marked as slow and only run in CI or on demand.
 from __future__ import annotations
 
 import importlib.resources
+import shutil
 import subprocess
 import sys
+import venv
 from pathlib import Path
 
 import pytest
@@ -51,17 +53,43 @@ def test_importlib_resources_can_list_files() -> None:
 
 @pytest.mark.slow
 def test_wheel_builds() -> None:
-    """Build a wheel from the source tree."""
-    repo_root = Path(__file__).parent.parent.parent.parent.parent.parent
+    """Build a wheel from the source tree and verify it imports after install."""
+    repo_root = Path(__file__).resolve().parents[3]
     result = subprocess.run(
-        [sys.executable, "-m", "build", "--wheel", "--no-isolation"],
+        [sys.executable, "-m", "build", "--wheel"],
         cwd=repo_root,
         capture_output=True,
         text=True,
     )
-    if result.returncode != 0:
-        pytest.skip(f"Wheel build failed (needs build deps): {result.stderr[:200]}")
+    assert result.returncode == 0, f"Wheel build failed: {result.stderr[:200]}"
 
     dist_dir = repo_root / "dist"
     wheels = list(dist_dir.glob("*.whl"))
     assert len(wheels) > 0, "No wheel produced"
+
+    install_dir = repo_root / ".tmp" / "wheel-smoke-venv"
+    if install_dir.exists():
+        shutil.rmtree(install_dir)
+    venv.create(str(install_dir), with_pip=True)
+    venv_python = install_dir / "bin" / "python"
+    if not venv_python.exists():
+        venv_python = install_dir / "Scripts" / "python.exe"
+
+    install_result = subprocess.run(
+        [str(venv_python), "-m", "pip", "install", "--quiet", f"{wheels[-1]}[production]"],
+        cwd=repo_root,
+        capture_output=True,
+        text=True,
+    )
+    assert install_result.returncode == 0, f"Wheel install failed: {install_result.stderr[:200]}"
+
+    import_result = subprocess.run(
+        [str(venv_python), "-c", "import rfsn_v10.server.app"],
+        cwd="/tmp",
+        capture_output=True,
+        text=True,
+    )
+    assert import_result.returncode == 0, f"Installed wheel import failed: {import_result.stderr[:200]}"
+
+    if install_dir.exists():
+        shutil.rmtree(install_dir, ignore_errors=True)

@@ -414,23 +414,27 @@ def check_release_integrity() -> dict:
     delegates to scripts/check_release_integrity.py so that the same
     validation rules are used everywhere (gate, CI, local runs).
     """
-    try:
-        from scripts.check_release_integrity import check
-    except Exception as exc:
-        return {
-            "name": "release_integrity",
-            "passed": False,
-            "message": f"Failed to import integrity checker: {exc}",
-        }
-    errors = check()
-    ok = len(errors) == 0
+    script_path = REPO_ROOT / "scripts" / "check_release_integrity.py"
+    env = os.environ.copy()
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    result = subprocess.run(
+        [sys.executable, str(script_path)],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=300,
+    )
+    combined_output = (result.stdout + result.stderr).strip()
+    ok = result.returncode == 0
     return {
         "name": "release_integrity",
         "passed": ok,
         "message": (
             "Integrity check passed" if ok
-            else f"{len(errors)} error(s): " + "; ".join(errors[:5])
+            else combined_output[:1000] or f"exit code {result.returncode}"
         ),
+        "returncode": result.returncode,
     }
 
 
@@ -629,18 +633,22 @@ def main() -> int:
     n_failed = sum(1 for c in checks if not c["passed"])
     release_ready = n_failed == 0
 
-    # Find the pytest_cpu_safe result for test counts
+    # Find pytest results for test counts.
     tests_passed = 0
     tests_failed = 0
+    tests_skipped = 0
     for c in checks:
-        if c["name"] == "pytest_cpu_safe":
+        if c.get("name", "").startswith("pytest_"):
             msg = c.get("message", "")
             m = re.search(r"(\d+) passed", msg)
             if m:
-                tests_passed = int(m.group(1))
+                tests_passed += int(m.group(1))
             m2 = re.search(r"(\d+) failed", msg)
             if m2:
-                tests_failed = int(m2.group(1))
+                tests_failed += int(m2.group(1))
+            m3 = re.search(r"(\d+) skipped", msg)
+            if m3:
+                tests_skipped += int(m3.group(1))
 
     try:
         git_commit = subprocess.check_output(
@@ -656,6 +664,7 @@ def main() -> int:
         "checks_failed": n_failed,
         "tests_passed": tests_passed,
         "tests_failed": tests_failed,
+        "tests_skipped": tests_skipped,
         "mlx_tests": "included" if (args.mlx or args.full) else "skipped",
         "git_commit": git_commit,
         "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

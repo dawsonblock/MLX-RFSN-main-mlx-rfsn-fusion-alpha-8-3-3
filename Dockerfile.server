@@ -1,7 +1,7 @@
 FROM python:3.11-slim
 
 LABEL maintainer="RFSN Contributors"
-LABEL description="RFSN v10 Inference Server — torch backend with real model deps"
+LABEL description="RFSN v10 Inference Server — portable backend with real model deps"
 
 WORKDIR /app
 
@@ -32,7 +32,6 @@ RUN mkdir -p /app/.cache /app/artifacts && chown -R rfsn:rfsn /app
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
-ENV RFSN_BACKEND=torch
 ENV RFSN_CACHE_DIR=/app/.cache
 ENV RFSN_LOG_LEVEL=INFO
 ENV RFSN_TELEMETRY_DIR=/app/artifacts/runtime_logs

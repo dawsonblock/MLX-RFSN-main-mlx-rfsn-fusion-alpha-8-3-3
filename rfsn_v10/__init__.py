@@ -4,10 +4,7 @@ from __future__ import annotations
 
 from importlib import import_module
 
-try:
-    from ._version import __version__
-except Exception:  # pragma: no cover
-    __version__ = "unknown"
+from ._version_source import __version__
 
 from .compat import MLX_AVAILABLE
 

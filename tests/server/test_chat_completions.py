@@ -47,6 +47,10 @@ class FakeGenerator:
         self.generate_call_count += 1
         yield from self.tokens
 
+    def generate(self, prompt: str, **gen_kwargs: Any):
+        self.generate_call_count += 1
+        yield from self.tokens
+
 
 class FakeTokenizer:
     """Fake tokenizer with optional chat template support."""
@@ -111,7 +115,7 @@ class TestChatCompletions:
 
     def test_chat_completions_non_streaming(self):
         """Non-streaming chat completions returns full text."""
-        _, client = _app_with_fake_generator(
+        application, client = _app_with_fake_generator(
             **{"server.require_api_key": False},
         )
         response = client.post(
@@ -127,6 +131,9 @@ class TestChatCompletions:
         data = response.json()
         assert data["choices"][0]["message"]["content"] == "Hello, world!"
         assert data["choices"][0]["finish_reason"] == "stop"
+        fake_generator = application.state.server.generator  # type: ignore[attr-defined]
+        assert fake_generator.chat_call_count == 0
+        assert fake_generator.generate_call_count == 1
 
     def test_chat_completions_streaming(self):
         """Streaming chat completions yields SSE events."""
@@ -230,8 +237,50 @@ class TestChatCompletions:
             },
         )
         assert response.status_code == 200
-        # The generator was called; we just verify no crash occurred.
-        assert gen.chat_call_count == 1
+        assert gen.generate_call_count == 1
+        assert gen.chat_call_count == 0
+
+    def test_streaming_and_non_streaming_use_same_raw_prompt(self):
+        """Streaming and non-streaming consume the rendered prompt exactly once."""
+        prompt_values: list[str] = []
+
+        class RecordingGenerator(FakeGenerator):
+            def generate(self, prompt: str, **gen_kwargs: Any):
+                prompt_values.append(prompt)
+                yield from self.tokens
+
+        tok = FakeTokenizer()
+        _, client = _app_with_fake_generator(
+            fake_generator=RecordingGenerator(tokens=["OK"]),
+            tokenizer=tok,
+            **{"server.require_api_key": False},
+        )
+        body = {
+            "model": "test",
+            "messages": [
+                {"role": "system", "content": "SYS"},
+                {"role": "user", "content": "HELLO"},
+            ],
+            "max_tokens": 1,
+        }
+        expected_prompt = tok.apply_chat_template(
+            [{"role": "system", "content": "SYS"}, {"role": "user", "content": "HELLO"}],
+            tokenize=False,
+            add_generation_prompt=True,
+        )
+
+        non_stream = client.post(
+            "/v1/chat/completions",
+            json={**body, "stream": False},
+        )
+        stream = client.post(
+            "/v1/chat/completions",
+            json={**body, "stream": True},
+        )
+
+        assert non_stream.status_code == 200
+        assert stream.status_code == 200
+        assert prompt_values == [expected_prompt, expected_prompt]
 
     def test_chat_completions_finish_reason_length(self):
         """finish_reason is 'length' when max_tokens is reached."""

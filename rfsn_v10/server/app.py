@@ -45,6 +45,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import secrets
 import threading
 import time
 from collections.abc import AsyncIterator
@@ -57,7 +58,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel, Field
 
-from .._version import __version__
+from .._version_source import __version__
 from ..config import RFSNConfig
 from ..model_loader import load_model_auto
 from ..runtime.generation import GenerationConfig, RFSNGenerator
@@ -211,6 +212,78 @@ class ChatCompletionResponse(BaseModel):
     created: int
     model: str
     choices: list[ChatCompletionChoice]
+
+
+# ---------------------------------------------------------------------------
+# Prompt and generation helpers
+# ---------------------------------------------------------------------------
+
+def _render_chat_prompt(tokenizer: object, messages: list[dict[str, str]]) -> str:
+    """Render OpenAI-style chat messages into the tokenizer's raw prompt."""
+    try:
+        return str(
+            tokenizer.apply_chat_template(  # type: ignore[union-attr]
+                messages, tokenize=False, add_generation_prompt=True,
+            )
+        )
+    except (AttributeError, TypeError, ValueError):
+        parts = []
+        for m in messages:
+            parts.append(f"{m['role']}: {m['content']}")
+        parts.append("assistant:")
+        return "\n".join(parts)
+
+
+def _truncate_on_stop(
+    accumulated_text: str,
+    token: str,
+    stop_sequences: list[str],
+) -> tuple[bool, str]:
+    """Return (stop_after_token, token_text_to_keep) for stop handling."""
+    if not stop_sequences:
+        return False, token
+    for seq in stop_sequences:
+        pos = accumulated_text.find(seq)
+        if pos == -1:
+            continue
+        text_before = accumulated_text[:pos]
+        already_yielded_len = len(accumulated_text) - len(token)
+        if already_yielded_len < len(text_before):
+            return True, text_before[already_yielded_len:]
+        return True, ""
+    return False, token
+
+
+def _collect_complete_tokens(
+    generator: object,
+    prompt: str,
+    max_new_tokens: int,
+    temperature: float,
+    top_p: float,
+    repetition_penalty: float,
+    stop_sequences: list[str],
+) -> tuple[str, int]:
+    """Collect a non-streaming response from a generator's raw prompt API."""
+    accumulated_text = ""
+    tokens_generated = 0
+    for token in generator.generate(  # type: ignore[attr-defined]
+        prompt,
+        max_new_tokens=max_new_tokens,
+        temperature=temperature,
+        top_p=top_p,
+        repetition_penalty=repetition_penalty,
+        stop_sequences=stop_sequences,
+    ):
+        tokens_generated += 1
+        stop_now, truncated_token = _truncate_on_stop(
+            accumulated_text + token,
+            token,
+            stop_sequences,
+        )
+        accumulated_text += truncated_token
+        if stop_now:
+            return accumulated_text, tokens_generated
+    return accumulated_text, tokens_generated
 
 
 # ---------------------------------------------------------------------------
@@ -416,7 +489,7 @@ def create_app(config: RFSNConfig | None = None) -> FastAPI:
             )
         if (
             credentials is None
-            or credentials.credentials != srv_cfg.api_key
+            or not secrets.compare_digest(credentials.credentials, srv_cfg.api_key)
         ):
             raise HTTPException(
                 status_code=401,
@@ -527,24 +600,12 @@ def create_app(config: RFSNConfig | None = None) -> FastAPI:
                 status_code=503, detail=str(exc),
             ) from exc
 
-        # Build prompt (guard against tokenizers without apply_chat_template)
+        # Build prompt exactly once and use it for both streaming and non-streaming.
         messages = [
             {"role": m.role, "content": m.content}
             for m in chat_request.messages
         ]
-        try:
-            prompt = str(
-                s.tokenizer.apply_chat_template(  # type: ignore[union-attr]
-                    messages, tokenize=False, add_generation_prompt=True,
-                )
-            )
-        except (AttributeError, TypeError, ValueError):
-            # Fallback for tokenizers without chat template
-            parts = []
-            for m in messages:
-                parts.append(f"{m['role']}: {m['content']}")
-            parts.append("assistant:")
-            prompt = "\n".join(parts)
+        prompt = _render_chat_prompt(s.tokenizer, messages)
 
         # Limit checks
         if len(prompt) > max_prompt:
@@ -582,19 +643,20 @@ def create_app(config: RFSNConfig | None = None) -> FastAPI:
                 media_type="text/event-stream",
             )
 
-        # Non-streaming
+        # Non-streaming: collect raw-prompt generation without reapplying chat template.
         t_start = time.monotonic()
         async with s.semaphore:
             try:
-                result = await asyncio.wait_for(
+                result_text, decode_tokens = await asyncio.wait_for(
                     asyncio.to_thread(
-                        generator.chat,
+                        _collect_complete_tokens,
+                        generator,
                         prompt,
-                        max_new_tokens=cfg.max_new_tokens,
-                        temperature=cfg.temperature,
-                        top_p=cfg.top_p,
-                        repetition_penalty=cfg.repetition_penalty,
-                        stop_sequences=cfg.stop_sequences,
+                        cfg.max_new_tokens,
+                        cfg.temperature,
+                        cfg.top_p,
+                        cfg.repetition_penalty,
+                        cfg.stop_sequences,
                     ),
                     timeout=timeout_s,
                 )
@@ -612,13 +674,6 @@ def create_app(config: RFSNConfig | None = None) -> FastAPI:
         s.metrics["last_error"] = None
 
         # Token-based TPS (not word-based)
-        decode_tokens = result.decode_token_count if hasattr(result, "decode_token_count") else 0
-        if decode_tokens == 0:
-            # Fallback: count tokens via tokenizer
-            try:
-                decode_tokens = len(s.tokenizer.encode(result.text))
-            except Exception:
-                decode_tokens = 0
         if elapsed_ms > 0 and decode_tokens > 0:
             s.metrics["last_decode_tps"] = round(
                 decode_tokens / (elapsed_ms / 1000), 1,
@@ -626,9 +681,7 @@ def create_app(config: RFSNConfig | None = None) -> FastAPI:
 
         # Determine correct finish reason
         finish_reason = "stop"
-        if hasattr(result, "finish_reason") and result.finish_reason:
-            finish_reason = result.finish_reason
-        elif decode_tokens >= cfg.max_new_tokens:
+        if decode_tokens >= cfg.max_new_tokens:
             finish_reason = "length"
 
         return ChatCompletionResponse(
@@ -643,7 +696,7 @@ def create_app(config: RFSNConfig | None = None) -> FastAPI:
                 ChatCompletionChoice(
                     index=0,
                     message=ChatMessage(
-                        role="assistant", content=result.text,
+                        role="assistant", content=result_text,
                     ),
                     finish_reason=finish_reason,
                 )
@@ -837,19 +890,12 @@ async def _sse_stream(
 
 
 # ---------------------------------------------------------------------------
-# Module-level default app (for uvicorn / CLI)
+# Module-level default app (for documented uvicorn usage)
 # ---------------------------------------------------------------------------
 
 app = create_app()
 
 
 # ---------------------------------------------------------------------------
-# Module entry-point (python -m rfsn_v10.server)
+# Module entry-point helper (python -m rfsn_v10.server)
 # ---------------------------------------------------------------------------
-
-if __name__ == "__main__":
-    import uvicorn
-
-    host = os.environ.get("RFSN_HOST", "127.0.0.1")
-    port = int(os.environ.get("RFSN_PORT", "8000"))
-    uvicorn.run(app, host=host, port=port)

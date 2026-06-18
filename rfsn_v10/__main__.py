@@ -73,12 +73,8 @@ def _cmd_version() -> int:
     """Print package, Python, and backend information."""
     import platform
 
+    from rfsn_v10._version_source import __version__ as pkg_version
     from rfsn_v10.compat import MLX_AVAILABLE
-
-    try:
-        from rfsn_v10._version import version as pkg_version
-    except ImportError:
-        pkg_version = "unknown (not installed from package)"
 
     backend = os.environ.get("RFSN_BACKEND", "mlx").lower()
     mlx_version = "not installed"

@@ -1,7 +1,7 @@
-version: '3.8'
+version: "3.8"
 
 # NOTE: RFSN v10 inference server mode.
-# This compose file runs the FastAPI server with torch backend.
+# This compose file runs the FastAPI server with the configured backend.
 # It requires real_model dependencies and a valid HuggingFace model ID.
 # For healthcheck-only validation, use docker-compose.yml instead.
 
@@ -20,7 +20,6 @@ services:
       - RFSN_LOG_LEVEL=INFO
       - RFSN_CACHE_DIR=/app/.cache
       - RFSN_METRICS_ENABLED=true
-      - RFSN_BACKEND=torch
       - RFSN_MODEL_ID=${RFSN_MODEL_ID:?RFSN_MODEL_ID is required. Set a HuggingFace model ID.}
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD is required. Set it in a .env file.}
     ports:
@@ -46,7 +45,15 @@ services:
       - CLICKHOUSE_PASSWORD=${CLICKHOUSE_PASSWORD:?CLICKHOUSE_PASSWORD is required. Set it in a .env file.}
       - CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT=1
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:8123/ping",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5

@@ -2,18 +2,20 @@
 
 Runs the FastAPI inference server via uvicorn.
 Environment variables:
-    RFSN_SERVER_HOST — bind host (default: 0.0.0.0)
-    RFSN_SERVER_PORT — bind port (default: 8000)
+    RFSN_HOST — bind host (default: 127.0.0.1)
+    RFSN_PORT — bind port (default: 8000)
+    RFSN_BACKEND — backend override (default: auto)
 """
 from __future__ import annotations
 
-import os
+from rfsn_v10.config import RFSNConfig
 
-from .app import app
+cfg = RFSNConfig.from_env()
 
-host = os.environ.get("RFSN_SERVER_HOST", "0.0.0.0")
-port = int(os.environ.get("RFSN_SERVER_PORT", "8000"))
+from .app import create_app  # noqa: E402
+
+app = create_app(cfg)
 
 import uvicorn  # noqa: E402
 
-uvicorn.run(app, host=host, port=port)
+uvicorn.run(app, host=cfg.server.host, port=cfg.server.port)
